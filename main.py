@@ -2,11 +2,15 @@ import streamlit as st
 import csv
 from io import StringIO, BytesIO
 from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4  # A4 is in portrait by default
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 import qrcode
 import os
-from zebra import Zebra  # Zebra printer integration
+import platform
+
+# Windows specific libraries to interact with printers
+if platform.system() == "Windows":
+    import win32print
 
 # Function to generate QR code
 def generate_qr_code(data):
@@ -22,21 +26,14 @@ def generate_qr_code(data):
     return img
 
 # Function to send labels to Zebra printer
-def print_to_zebra(csv_file, label_width, label_height, selected_fields):
+def print_to_zebra(csv_file, label_width, label_height, selected_fields, printer_name):
     csv_file.seek(0)
     csv_content = csv_file.read().decode("utf-8")
     csv_reader = csv.DictReader(StringIO(csv_content))
 
-    zebra_printer = Zebra()
-    printers = zebra_printer.getqueues()
-    
-    if not printers:
-        st.error("No Zebra printers found. Please ensure your Zebra printer is connected.")
-        return
-    
-    # Select a printer
-    selected_printer = st.selectbox("Select Zebra Printer", printers)
-    zebra_printer.setqueue(selected_printer)
+    # Set up Zebra printer connection
+    import zebra
+    zebra_printer = zebra.Zebra(printer_name)
 
     # ZPL (Zebra Programming Language) template for label printing
     for row in csv_reader:
@@ -45,7 +42,7 @@ def print_to_zebra(csv_file, label_width, label_height, selected_fields):
         qr_img_path = f"{qr_data}_temp_qr.png"
         qr_img.save(qr_img_path)
 
-        # Send ZPL commands to printer
+        # Construct ZPL command
         zpl = f"""
         ^XA
         ^FO10,10^BQN,2,5^FDLA,{qr_data}^FS
@@ -55,7 +52,7 @@ def print_to_zebra(csv_file, label_width, label_height, selected_fields):
         zebra_printer.output(zpl)
         os.remove(qr_img_path)
 
-    st.success("Labels sent to Zebra printer.")
+    st.success(f"Labels sent to {printer_name} Zebra printer.")
 
 # Function to create PDF with QR code and dynamic text for each row
 def create_pdf_with_qr_from_csv(csv_file, label_width, label_height, selected_fields):
@@ -106,6 +103,23 @@ def create_pdf_with_qr_from_csv(csv_file, label_width, label_height, selected_fi
     output.seek(0)
     return output
 
+# Function to get the available printers
+def get_printers():
+    printers = []
+    if platform.system() == "Windows":
+        # Get the available printers using win32print on Windows
+        printers = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)
+        printers = [printer[2] for printer in printers]  # Extract printer names
+    elif platform.system() == "Linux":
+        # For Linux, we use lpstat to list printers
+        printers = os.popen("lpstat -p").read().splitlines()
+        printers = [printer.split(" ")[1] for printer in printers]
+    elif platform.system() == "Darwin":
+        # For macOS, use lpstat as well
+        printers = os.popen("lpstat -p").read().splitlines()
+        printers = [printer.split(" ")[1] for printer in printers]
+    return printers
+
 # Streamlit app
 st.title("QR Label Generator")
 
@@ -123,18 +137,28 @@ if uploaded_csv is not None:
 
         selected_fields = st.multiselect("Select fields to display", fieldnames, default=fieldnames)
 
-        action = st.radio("Choose an action", ("Download PDF", "Print to Zebra Printer"))
+        # Get available printers from the system
+        printers = get_printers()
 
-        if action == "Download PDF":
-            pdf_output = create_pdf_with_qr_from_csv(uploaded_csv, label_width, label_height, selected_fields)
-            st.download_button(
-                label="Download QR Code PDF",
-                data=pdf_output,
-                file_name="QR_Labels.pdf",
-                mime="application/pdf"
-            )
-        elif action == "Print to Zebra Printer":
-            print_to_zebra(uploaded_csv, label_width, label_height, selected_fields)
+        if printers:
+            selected_printer = st.selectbox("Select Printer", printers)
 
+            action = st.radio("Choose an action", ("Download PDF", "Print to Zebra Printer"))
+
+            if action == "Download PDF":
+                pdf_output = create_pdf_with_qr_from_csv(uploaded_csv, label_width, label_height, selected_fields)
+                st.download_button(
+                    label="Download QR Code PDF",
+                    data=pdf_output,
+                    file_name="QR_Labels.pdf",
+                    mime="application/pdf"
+                )
+            elif action == "Print to Zebra Printer" and selected_printer:
+                if st.button("Print Labels"):
+                    print_to_zebra(uploaded_csv, label_width, label_height, selected_fields, selected_printer)
+
+        else:
+            st.warning("No printers found on your system.")
+    
     except Exception as e:
         st.error(f"An error occurred: {e}")
