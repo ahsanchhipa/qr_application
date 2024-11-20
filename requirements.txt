@@ -3,3 +3,4 @@ reportlab
 qrcode
 Pillow
 zebra
+pywin32
