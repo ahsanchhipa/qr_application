@@ -1,4 +1,3 @@
-#add printer
 import streamlit as st
 import csv
 from io import StringIO, BytesIO
